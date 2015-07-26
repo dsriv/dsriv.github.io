@@ -1,0 +1,102 @@
+Practical Machine Learning 
+========================================================
+This is my solution for the Coursera Practical Machine Learning course project. 
+
+I. Data Cleanup
+
+Read the files:
+
+The are lots of NA values and invalid entries in table, such as "#DIV/0!". 
+In addition, many numeric values are read as factor. 
+
+Hence, I chose to read in the input file as follows:
+
+
+
+```{r}
+pml.train <- read.csv("pml-training.csv",na.strings = c("",",","#DIV/0!","NA"),stringsAsFactors=FALSE)
+```
+
+We can check the distribution of classes. Class imbalance can cause many issues. 
+
+```{r}
+table(pml.train$classe)
+```
+
+We see that class A is a bit over-represented, but not to a huge extend. 
+
+Need to handle missing data. Can plot the #of missing data per column:
+```{r}
+pml.train.na.count <- apply(pml.train,2, function(x) length(which(is.na(x))))
+```
+
+
+You can also embed plots, for example:
+
+```{r fig.width=7, fig.height=6}
+library(ggplot2)
+qplot(1:ncol(pml.train),pml.train.na.count,geom="point",xlab="Column Index",ylab="Number of NA values",main="NA per column")
+```
+
+Lots of columns have a very high number of missing values. Choose only complete columns:
+
+```{r}
+complete_cols_names <- names(pml.train)[pml.train.na.count == 0]
+df2 <- pml.train[,complete_cols_names]
+df2[,"classe"] <- as.factor(df2[,"classe"])
+```
+
+
+II. Feature Visualization
+
+near zero variance
+```{r}
+library(caret)
+df2_training <- df2[,8:59] #omit classe
+nzv <- nearZeroVar(df2_training, saveMetrics=TRUE)
+nzv
+```
+
+Collinearity
+```{r}
+library(corrplot)
+#correlations
+M <- abs(cor(df2_training))
+corrplot(M, method="circle")
+diag(M) <- 0
+which(M > 0.8,arr.ind=T) 
+```
+
+PCA analysis
+```{r}
+df2_training.pca <- prcomp(df2_training, center=TRUE, scale=TRUE)
+summary(df2_training.pca) #takes about 20 components.
+```
+
+
+III. Predictive Modelling
+
+Data Splitting:
+
+Only given training set. Split into 2:
+
+a. Training Set: Use CV on this set for model tuning, parameter selection. Will also provide a CV out of sample estimate. 
+b. Testing Set: Clean test set, not touched during training and validation. 
+
+```{r}
+#Load Data
+trainX <- readRDS("trainX.rds")
+trainY <- readRDS("trainY.rds")
+testX <- readRDS("testX.rds")
+testY <- readRDS("testY.rds")
+str(trainX)
+```
+
+
+1. RF
+```{r}
+model_rf <- readRDS("trained_random_forest2.rds")
+model_rf
+model_rf_pred <- predict(model_rf, testX)
+confusionMatrix(model_rf_pred, testY)
+```
