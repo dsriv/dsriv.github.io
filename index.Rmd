@@ -2,43 +2,37 @@ Practical Machine Learning
 ========================================================
 This is my solution for the Coursera Practical Machine Learning course project. 
 
-I. Data Cleanup
+## I. Data Cleanup
 
-Read the files:
-
-The are lots of NA values and invalid entries in table, such as "#DIV/0!". 
-In addition, many numeric values are read as factor. 
-
+The are lots of missing values, as well as invalid values such as "#DIV/0!" that need to be cleaned up.
+We need to make sure that all invalid entries are read as NA so that they can be handled. 
 Hence, I chose to read in the input file as follows:
-
-
 
 ```{r}
 pml.train <- read.csv("pml-training.csv",na.strings = c("",",","#DIV/0!","NA"),stringsAsFactors=FALSE)
-```
+``` 
 
-We can check the distribution of classes. Class imbalance can cause many issues. 
+We can check the distribution of classes. Class imbalance can cause many issues during the training of 
+Machine Learning algorithms. 
 
 ```{r}
 table(pml.train$classe)
 ```
 
-We see that class A is a bit over-represented, but not to a huge extend. 
+We see that class A is a bit over-represented, but not to a huge extent. 
 
-Need to handle missing data. Can plot the #of missing data per column:
-```{r}
+Also, we need to handle missing data. The plot of the number of NA values per column:
+```{r, echo=FALSE}
 pml.train.na.count <- apply(pml.train,2, function(x) length(which(is.na(x))))
 ```
 
 
-You can also embed plots, for example:
-
-```{r fig.width=7, fig.height=6}
+```{r, fig.width=7, fig.height=6, echo=FALSE}
 library(ggplot2)
 qplot(1:ncol(pml.train),pml.train.na.count,geom="point",xlab="Column Index",ylab="Number of NA values",main="NA per column")
 ```
 
-Lots of columns have a very high number of missing values. Choose only complete columns:
+As we can see, lots of columns have a very high number of missing values. If there were only a few missing values, then the missing values could be imputed. However, in this case I chose to drop columns with missing values.
 
 ```{r}
 complete_cols_names <- names(pml.train)[pml.train.na.count == 0]
@@ -46,57 +40,252 @@ df2 <- pml.train[,complete_cols_names]
 df2[,"classe"] <- as.factor(df2[,"classe"])
 ```
 
+The final cleaned data frame has the following columns:
 
-II. Feature Visualization
-
-near zero variance
 ```{r}
-library(caret)
-df2_training <- df2[,8:59] #omit classe
-nzv <- nearZeroVar(df2_training, saveMetrics=TRUE)
-nzv
+names(df2)
+````
+
+## II. Feature Visualization and Selection
+
+The first seven columns do not contain actual physical measurements, and should be considered as meta-data. Hence, these columns will not be used as features:
+
+```{r}
+names(df2)[1:7]
 ```
 
-Collinearity
+This leaves us with 53 columns, of which column 60 is the predictor variable. Hence, there are 52 features to train on. 
+
+Not all these 52 features might be useful. We can try to analyze if there are any redundant features. 
+
+a. Near Zero Variance
+
+Some features contain almost all identical values, resulting in 0 or close to 0 variance. Such features would not
+be useful and may be dropped:
+
+```{r}
+library(caret)
+df2_training <- df2[,8:59] #omit classe, and first 7 features for visualization purposes. 
+nzv <- nearZeroVar(df2_training, saveMetrics=TRUE)
+#Number of Features with Zero Variance:
+sum(nzv$zeroVar == TRUE)
+#Number of Features with Near Zero Variance:
+sum(nzv$nzv == TRUE)
+```
+There were no features with 0 or near 0 variance. 
+
+
+b. Collinearity
+
+Some features are highly correlated, and this can cause problems with certain classifiers. 
+We can visualize the degree of correlation as follows:
+
 ```{r}
 library(corrplot)
 #correlations
 M <- abs(cor(df2_training))
 corrplot(M, method="circle")
+```
+
+We can list the pairs of variables with correlation > 0.8:
+```{r}
 diag(M) <- 0
 which(M > 0.8,arr.ind=T) 
 ```
 
-PCA analysis
-```{r}
-df2_training.pca <- prcomp(df2_training, center=TRUE, scale=TRUE)
-summary(df2_training.pca) #takes about 20 components.
-```
+There are cleary a number of correlated variables. This can cause some problems with some training algorithms. 
+It is something to keep in mind, but for now we will not try and do any further feature subsetting. 
 
 
-III. Predictive Modelling
+## III. Predictive Modelling
 
-Data Splitting:
+### Data Splitting:
 
-Only given training set. Split into 2:
+We will split our given Training data into 2 new sets. The rationale is:
 
-a. Training Set: Use CV on this set for model tuning, parameter selection. Will also provide a CV out of sample estimate. 
-b. Testing Set: Clean test set, not touched during training and validation. 
+a. Training Set: Use Cross Validation on this set for model tuning and parameter selection. Cross validation will also provide an Out-of-Sample error estimate, aka an estimate of the Generalization error. 
 
-```{r}
+b. Testing Set: This is clean test set, not touched during training and validation. It will be used only for testing our models, and providing a second estimate of the Out-of-sample error. 
+
+Note: Since Cross-Validation is being used, if the data set was very small I would drop the Testing Set entirely, and rely on the Cross-Validation error estimates only.  
+
+```{r, echo=FALSE}
 #Load Data
 trainX <- readRDS("trainX.rds")
 trainY <- readRDS("trainY.rds")
 testX <- readRDS("testX.rds")
 testY <- readRDS("testY.rds")
-str(trainX)
 ```
 
+```{r, eval=FALSE}
+trainIndex <- createDataPartition(df2$classe, p = 0.75,list=FALSE)
+trainX <- df2[trainIndex,8:59]
+trainY <- df2[trainIndex,60]
+testX <- df2[-trainIndex,8:59]
+testY <- df2[-trainIndex,60]
+```
 
-1. RF
+### Model Selection:
+
+We will try a number of predictive models, including Linear Discriminant Analysis (LDA), Support Vector Machines (SVM), Boosted Trees (GBM) and Random Forests (RF).
+
+We will be using 5-fold cross validation:
+```{r, eval=FALSE}
+cvCtrl <- trainControl(method="cv",number=5,classProbs=TRUE)
+```
+
+### a. Linear Discriminant Analysis:
+```{r, eval=FALSE}
+model_lda <- train(x=trainX, y=trainY, method="lda",preProc=c("center","scale"),trControl=cvCtrl)
+```
+
+```{r, echo=FALSE}
+model_lda <- readRDS("trained_lda.rds")
+```
+
+The summary of the LDA model:
+```{r}
+model_lda
+```
+The LDA model had a quite poor Cross-Validaton error rate, only ~70% accuracy. 
+We can double check this by looking at the prediction accuracy on the test set:
+
+```{r}
+model_lda_pred <- predict(model_lda, testX)
+confusionMatrix(model_lda_pred, testY)
+```
+
+The accuracy is again only 69%. 
+
+The low accuracy might be due to some of the assumptions of the LDA model being violated. The features may not be jointly jointly gaussian. Another possibility is that the training set is not linearly separable. We could use an extension of LDA known as QDA (Quadratic Discriminant Analysis) that results in non-linear decision boundaries. However, lets move on to some more modern classifiers.
+
+### b. Support Vector Machines (SVM)
+
+Support Vector Machines are a form of Maximum Margin classifiers, that use some clever tricks such as Kernels to transform a given feature space into a higher dimensional space. Even if the training data set is not linearly separable in the original feature space, it can be separable in the higher dimensional space. 
+
+There is one main parameter that is used for tuning SVM models, known as the Cost parameter C. C can be adjusted to trade off Bias vs. Variance. 
+
+R's caret package automatically tunes the SVM model over a grid of possible C values during cross-validation, and chooses the C value that provides the lowest Cross-Validation error rate. 
+
+Set up an SVM with the Radial Basis Function as a Kernel:
+
+```{r, eval=FALSE}
+svmTune <- train(x=trainX, y=trainY, method="svmRadial",tuneLength=18,preProc=c("center","scale"),trControl=cvCtrl)
+```
+
+```{r, echo=FALSE}
+svmTune <- readRDS("trained_svm.rds")
+```
+
+The details of the trained SVM model:
+```{r}
+svmTune
+```
+
+The Cross-Validation accuracy for the optimal parameter was ~ 84%. Better than LDA, but still not great. 
+The optimal value for C during Cross-Validaton was 1024. We can visualize this, by plotting the CV accuracy vs. C:
+
+```{r}
+plot(svmTune)
+```
+
+The prediction accuracy results for the SVM are:
+```{r}
+svm_pred <- predict(svmTune,testX)
+confusionMatrix(svm_pred, testY)
+```
+
+The predicion accuracy was 83.3%, in line with the Cross-Validation accuracy estimates. We could probably improve the prediction accuracy with more feature engineering, such as improved scaling. We could also iterate over more tuning parameters, such as Gamma with is specific to the RBF Kernel. 
+
+
+### c. Gradient Boosting (GBM)
+
+Gradient Boosting is a Classification tree based boosting algorithm. It produces an ensemble of simple Decision Tree classifiers using boosting, and produces a final classification based on these. 
+
+The main parameters to tune are:
+
+n.trees:  # Boosting Iterations; 
+interaction.depth: Max Tree Depth for each of the weak learners; 
+n.minobsinnode : Min. Terminal Node Size, useful for Bias/Variance trade-offs
+
+We can train a GBM model as follows. Caret will automatically provide some tuning during Cross-Validation:
+```{r, eval=FALSE}
+model_gbm <- train(x=trainX, y=trainY,method="gbm",trControl=cvCtrl)
+```
+
+```{r, echo=FALSE}
+model_gbm <- readRDS("trained_gbm_3.rds")
+```
+
+The details of the GBM model:
+```{r}
+model_gbm
+```
+
+Choosing the number of iterations to be 150, and the interaction depth to be 3 produces the best CV accuracy, which is quite good, ~96 %. 
+
+We can visualize the interaction of the parameters on accuracy as follows:
+
+```{r}
+plot(model_gbm)
+```
+
+As the number of iterations is increased, and the the interaction depth is increased, the CV accuracy keeps improving. From this it looks like we are underfitting, and increasing the model complexity should lead to even better accuracy estimates.
+
+We can check the accuracy on our held out test set to make sure that the CV accuracy estimates are reliable:
+
+```{r}
+model_gbm_pred <- predict(model_gbm,testX)
+confusionMatrix(model_gbm_pred, testY)
+```
+
+The test set accuracy is 95.7%, which is the best so far. 
+
+
+### d. Random Forests
+
+The last model to test will be the Random Forest. Random Forests are similar to Bagging techniques, in that they use bootstrapping to create new training sets, and produce an ensemble of decision trees using these sets. 
+
+There is a random component, in that during the building of tree, at each split only a subset of features are selected. This produces a higher diversity in the ensemble of decision trees, and de-correlates them. This lowers the variance when the models as aggregated. 
+
+The mtry parameter controls the  #Randomly Selected Predictors, and this will be tuned during the Cross Validation process. 
+
+We can train our Random Forest as follows:
+
 ```{r}
 model_rf <- readRDS("trained_random_forest2.rds")
+```
+
+```{r, eval=FALSE}
+model_rf <- train(x=trainX, y=trainY, method="rf",trControl=cvCtrl)
+```
+
+The results of the Cross-Validation:
+```{r}
 model_rf
+```
+
+The optimal value of mtry is 27, out of the total number of predictors which is 52. The CV accuracy is very high, > 99%, easily the best so far. 
+
+We can verify the CV accuracy estimate using the test set:
+
+```{r}
 model_rf_pred <- predict(model_rf, testX)
 confusionMatrix(model_rf_pred, testY)
 ```
+
+The test set accuracy estimate is also > 99 %. 
+
+
+## Conclusion
+
+Out of the 4 models trained, LDA, SVM, GBM and RF,  the Random Forest Model had the best test set accuracy, > 99 %. 
+
+The GBM model also had a quite high accuracy of > 95 %. By increasing the model complexity, this accuracy could be boosted further. 
+
+The SVM model had an accuracy of 83%. More in-depth feature engineering and paramter tuning will be required to boost its performance. 
+
+The LDA model had a quite low accuracy of 70%. The data is probably not linearly separable, or some of the model assumptions are violated. 
+
+The RF model was used to generate the predictions for the 20 test examples. It correctly classified all of them. 
+
